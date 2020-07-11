@@ -15,23 +15,14 @@ CLASS ycl_abap_file_uploader DEFINITION
     DATA filedata TYPE string.
 
     METHODS get_input_field_value IMPORTING name         TYPE string
-                                            dataref      TYPE data
+                                            struct       TYPE data
                                   RETURNING VALUE(value) TYPE string.
     METHODS get_html RETURNING VALUE(ui_html) TYPE string.
 
-    METHODS set_status IMPORTING response TYPE REF TO if_web_http_response
-                                 status   TYPE i DEFAULT if_web_http_status=>bad_request
-                                 log_text TYPE string.
-
-    METHODS validate_table IMPORTING response     TYPE REF TO if_web_http_response
-                           RETURNING VALUE(valid) TYPE abap_bool.
-
-    METHODS validate_extension IMPORTING response     TYPE REF TO if_web_http_response
-                               RETURNING VALUE(valid) TYPE abap_bool.
 
     METHODS create_response IMPORTING sap_table_request TYPE string
                             RETURNING VALUE(res)        TYPE string.
-    METHODS data_to_table IMPORTING response    TYPE REF TO if_web_http_response
+    METHODS data_to_table IMPORTING status TYPE REF TO lcl_status
                           RETURNING VALUE(done) TYPE abap_bool.
     METHODS unpack_data IMPORTING request TYPE REF TO if_web_http_request
                         RAISING   cx_web_message_error.
@@ -45,54 +36,24 @@ CLASS ycl_abap_file_uploader  IMPLEMENTATION.
 
       WHEN CONV string( if_web_http_client=>get ).
 
-        DATA(sap_table_request) = request->get_header_field( 'sap-table-request' ).
-        IF sap_table_request IS INITIAL.
-          response->set_text( get_html(  ) ).
-        ELSE.
-          response->set_text( create_response( sap_table_request ) ).
-        ENDIF.
+        response->set_text( create_response( request->get_header_field( 'sap-table-request' ) ) ).
 
       WHEN CONV string( if_web_http_client=>post ).
 
         unpack_data( request ).
 
-        data_to_table( response ).
+        data_to_table( NEW lcl_status( response ) ).
 
     ENDCASE.
 
   ENDMETHOD.
 
-  METHOD set_status.
-    response->set_status( i_code = status
-                          i_reason = log_text ).
-    response->set_text( log_text ).
-  ENDMETHOD.
-
-  METHOD validate_extension.
-    " Check file extension is valid, only json today.
-    IF fileext <> `json`.
-      set_status( response = response
-                  log_text = `File type not supported` ).
-      valid = abap_false.
-    ELSE.
-      valid = abap_true.
-    ENDIF.
-  ENDMETHOD.
-
-  METHOD validate_table.
-    " Check table name is valid.
-    IF tablename IS INITIAL OR
-      NOT xco_cp_abap_repository=>object->tabl->database_table->for( CONV #( tablename ) )->exists(  ).
-      set_status( response = response
-                  log_text = |Table name { tablename } not valid or does not exist|  ).
-      valid = abap_false.
-    ELSE.
-      valid = abap_true.
-    ENDIF.
-
-  ENDMETHOD.
-
   METHOD create_response.
+    IF sap_table_request IS INITIAL.
+      res = get_html( ).
+      RETURN.
+    ENDIF.
+
     DATA(name_filter) = xco_cp_abap_repository=>object_name->get_filter(
                          xco_cp_abap_sql=>constraint->contains_pattern( to_upper( sap_table_request ) && '%' )  ).
 
@@ -114,7 +75,7 @@ CLASS ycl_abap_file_uploader  IMPLEMENTATION.
     DATA dynamic_table TYPE REF TO data.
     FIELD-SYMBOLS <table_structure> TYPE table.
 
-    CHECK validate_table( response ) AND validate_extension( response ).
+    CHECK status->valid_table( tablename ) AND status->valid_extension( fileext ).
 
     TRY.
         CREATE DATA dynamic_table TYPE TABLE OF (tablename).
@@ -130,15 +91,13 @@ CLASS ycl_abap_file_uploader  IMPLEMENTATION.
 
         INSERT (tablename) FROM TABLE @<table_structure>.
         IF sy-subrc = 0.
-          set_status( response = response
-                      status = if_web_http_status=>ok
-                      log_text = `Table updated successfully` ).
+          status->set( status = if_web_http_status=>ok
+                       log_text = `Table updated successfully` ).
           done = abap_true.
         ENDIF.
 
       CATCH cx_sy_open_sql_db cx_sy_create_data_error INTO DATA(exception).
-        set_status( response = response
-                    log_text = exception->get_text(  ) ).
+        status->set( exception->get_text(  ) ).
     ENDTRY.
   ENDMETHOD.
 
@@ -146,7 +105,7 @@ CLASS ycl_abap_file_uploader  IMPLEMENTATION.
     FIELD-SYMBOLS: <value> TYPE data,
                    <field> TYPE any.
 
-    ASSIGN COMPONENT name  OF STRUCTURE dataref TO <field>.
+    ASSIGN COMPONENT name  OF STRUCTURE struct TO <field>.
     CHECK <field> IS ASSIGNED.
 
     ASSIGN <field>->* TO <value>.
@@ -175,16 +134,15 @@ CLASS ycl_abap_file_uploader  IMPLEMENTATION.
     DELETE content FROM ( lines( content ) - 8 ) TO lines( content ).  " get rid of the last 9 lines
 
     LOOP AT content REFERENCE INTO content_item.  " put it all back together again humpdy dumpdy....
-      filedata = filedata && content_item->*.
+      filedata &&= content_item->*.
     ENDLOOP.
 
     " Unpack input field values such as tablename, dataoption, etc.
-    DATA(ui_data) = request->get_form_field(  `filetoupload-data` ).
-    DATA(ui_dataref) = /ui2/cl_json=>generate( json = ui_data ).
-    IF ui_dataref IS BOUND.
-      ASSIGN ui_dataref->* TO FIELD-SYMBOL(<ui_dataref>).
-      tablename = me->get_input_field_value( name = `TABLENAME` dataref = <ui_dataref> ).
-      dataoption = me->get_input_field_value( name = `DATAOPTION` dataref = <ui_dataref> ).
+    DATA(lr_ui) = /ui2/cl_json=>generate( request->get_form_field( `filetoupload-data` ) ).
+    IF lr_ui IS BOUND.
+      ASSIGN lr_ui->* TO FIELD-SYMBOL(<ui_data>).
+      tablename = get_input_field_value( name = `TABLENAME` struct = <ui_data> ).
+      dataoption = get_input_field_value( name = `DATAOPTION` struct = <ui_data> ).
     ENDIF.
 
   ENDMETHOD.
