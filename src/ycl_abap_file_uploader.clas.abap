@@ -12,19 +12,24 @@ CLASS ycl_abap_file_uploader DEFINITION
     DATA filename TYPE string.
     DATA fileext TYPE string.
     DATA dataoption TYPE string.
-    DATA filedata TYPE string.
 
     METHODS get_input_field_value IMPORTING name         TYPE string
                                             struct       TYPE data
                                   RETURNING VALUE(value) TYPE string.
     METHODS get_html RETURNING VALUE(ui_html) TYPE string.
 
+    METHODS dynamic_table IMPORTING tablename TYPE string
+                                   filedata TYPE string
+                         RETURNING VALUE(data_ref) TYPE REF TO data
+                         RAISING cx_sy_create_data_error.
 
     METHODS create_response IMPORTING sap_table_request TYPE string
                             RETURNING VALUE(res)        TYPE string.
     METHODS data_to_table IMPORTING status TYPE REF TO lcl_status
+                                    filedata TYPE string
                           RETURNING VALUE(done) TYPE abap_bool.
     METHODS unpack_data IMPORTING request TYPE REF TO if_web_http_request
+                        RETURNING VALUE(filedata) TYPE string
                         RAISING   cx_web_message_error.
 ENDCLASS.
 
@@ -40,10 +45,8 @@ CLASS ycl_abap_file_uploader  IMPLEMENTATION.
 
       WHEN CONV string( if_web_http_client=>post ).
 
-        unpack_data( request ).
-
-        data_to_table( NEW lcl_status( response ) ).
-
+        data_to_table( status = NEW lcl_status( response )
+                       filedata = unpack_data( request ) ).
     ENDCASE.
 
   ENDMETHOD.
@@ -70,20 +73,27 @@ CLASS ycl_abap_file_uploader  IMPLEMENTATION.
     res &&= `]`.
   ENDMETHOD.
 
+  METHOD dynamic_table.
+    FIELD-SYMBOLS <table_structure> TYPE STANDARD table.
+
+    CREATE DATA data_ref TYPE TABLE OF (tablename).
+    ASSIGN data_ref->* TO <table_structure>.
+
+    /ui2/cl_json=>deserialize( EXPORTING json = filedata
+                                         pretty_name = /ui2/cl_json=>pretty_mode-none
+                               CHANGING data = <table_structure> ).
+  ENDMETHOD.
+
   METHOD data_to_table.
     " Load the data to the table via dynamic internal table
-    DATA dynamic_table TYPE REF TO data.
     FIELD-SYMBOLS <table_structure> TYPE table.
 
     CHECK status->valid_table( tablename ) AND status->valid_extension( fileext ).
 
     TRY.
-        CREATE DATA dynamic_table TYPE TABLE OF (tablename).
-        ASSIGN dynamic_table->* TO <table_structure>.
-
-        /ui2/cl_json=>deserialize( EXPORTING json = filedata
-                                             pretty_name = /ui2/cl_json=>pretty_mode-none
-                                   CHANGING data = <table_structure> ).
+        DATA(table_ref) = dynamic_table( tablename = tablename
+                                         filedata = filedata ).
+        ASSIGN table_ref->* TO <table_structure>.
 
         IF dataoption = `1`.  "if replace, delete the data from the table first
           DELETE FROM (tablename).
