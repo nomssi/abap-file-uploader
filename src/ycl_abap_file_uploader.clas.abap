@@ -19,18 +19,21 @@ CLASS ycl_abap_file_uploader DEFINITION
     METHODS get_html RETURNING VALUE(ui_html) TYPE string.
 
     METHODS dynamic_table IMPORTING tablename TYPE string
-                                   filedata TYPE string
-                         RETURNING VALUE(data_ref) TYPE REF TO data
-                         RAISING cx_sy_create_data_error.
+                                    filedata TYPE string
+                          RETURNING VALUE(data_ref) TYPE REF TO data
+                          RAISING cx_sy_create_data_error.
 
     METHODS create_response IMPORTING sap_table_request TYPE string
                             RETURNING VALUE(res)        TYPE string.
-    METHODS data_to_table IMPORTING status TYPE REF TO lcl_status
-                                    filedata TYPE string
-                          RETURNING VALUE(done) TYPE abap_bool.
+    METHODS fill_table IMPORTING status TYPE REF TO lcl_status
+                                 filedata TYPE string
+                       RETURNING VALUE(done) TYPE abap_bool.
     METHODS unpack_data IMPORTING request TYPE REF TO if_web_http_request
                         RETURNING VALUE(filedata) TYPE string
                         RAISING   cx_web_message_error.
+    METHODS extract_filename IMPORTING i_content_item TYPE string
+                             EXPORTING filename TYPE string
+                                       fileext TYPE string.
 ENDCLASS.
 
 CLASS ycl_abap_file_uploader  IMPLEMENTATION.
@@ -45,8 +48,8 @@ CLASS ycl_abap_file_uploader  IMPLEMENTATION.
 
       WHEN CONV string( if_web_http_client=>post ).
 
-        data_to_table( status = NEW lcl_status( response )
-                       filedata = unpack_data( request ) ).
+        fill_table( status = NEW lcl_status( response )
+                    filedata = unpack_data( request ) ).
     ENDCASE.
 
   ENDMETHOD.
@@ -84,7 +87,7 @@ CLASS ycl_abap_file_uploader  IMPLEMENTATION.
                                CHANGING data = <table_structure> ).
   ENDMETHOD.
 
-  METHOD data_to_table.
+  METHOD fill_table.
     " Load the data to the table via dynamic internal table
     FIELD-SYMBOLS <table_structure> TYPE table.
 
@@ -126,25 +129,16 @@ CLASS ycl_abap_file_uploader  IMPLEMENTATION.
     " the request comes in with metadata around the actual file data,
     " extract the filename and fileext from this metadata as well as the raw file data.
     SPLIT request->get_text(  ) AT cl_abap_char_utilities=>cr_lf INTO TABLE DATA(content).
-    READ TABLE content REFERENCE INTO DATA(content_item) INDEX 2.
-    IF sy-subrc = 0.
-
-      SPLIT content_item->* AT ';' INTO TABLE DATA(content_dis).
-      READ TABLE content_dis REFERENCE INTO DATA(content_dis_item) INDEX 3.
-      IF sy-subrc = 0.
-        SPLIT content_dis_item->* AT '=' INTO DATA(fn) filename.
-        REPLACE ALL OCCURRENCES OF `"` IN filename WITH space.
-        CONDENSE filename NO-GAPS.
-        SPLIT filename AT '.' INTO filename fileext.
-      ENDIF.
-
+    DATA(content_size) = lines( content ).
+    IF content_size GE 2.
+      extract_filename( EXPORTING i_content_item = content[ 2 ]
+                        IMPORTING filename = filename
+                                  fileext = fileext ).
     ENDIF.
 
-    DELETE content FROM 1 TO 4.  " Get rid of the first 4 lines
-    DELETE content FROM ( lines( content ) - 8 ) TO lines( content ).  " get rid of the last 9 lines
-
-    LOOP AT content REFERENCE INTO content_item.  " put it all back together again humpdy dumpdy....
-      filedata &&= content_item->*.
+    " Get rid of the first 4 lines and the last 9 lines
+    LOOP AT content FROM 5 TO  ( content_size - 9 ) ASSIGNING FIELD-SYMBOL(<content_item>).  " put it all back together again humpdy dumpdy....
+      filedata &&= <content_item>.
     ENDLOOP.
 
     " Unpack input field values such as tablename, dataoption, etc.
@@ -154,7 +148,20 @@ CLASS ycl_abap_file_uploader  IMPLEMENTATION.
       tablename = get_input_field_value( name = `TABLENAME` struct = <ui_data> ).
       dataoption = get_input_field_value( name = `DATAOPTION` struct = <ui_data> ).
     ENDIF.
+  ENDMETHOD.
 
+  METHOD extract_filename.
+    CLEAR: filename,
+           fileext.
+
+    SPLIT i_content_item AT ';' INTO TABLE DATA(content_dis).
+    ASSIGN content_dis[ 3 ] TO FIELD-SYMBOL(<content_dis_item>).
+    CHECK sy-subrc = 0.
+
+    SPLIT <content_dis_item> AT '=' INTO DATA(fn) filename.
+    REPLACE ALL OCCURRENCES OF `"` IN filename WITH space.
+    CONDENSE filename NO-GAPS.
+    SPLIT filename AT '.' INTO filename fileext.
   ENDMETHOD.
 
   METHOD get_html.
