@@ -18,22 +18,22 @@ CLASS ycl_abap_file_uploader DEFINITION
                                   RETURNING VALUE(value) TYPE string.
     METHODS get_html RETURNING VALUE(ui_html) TYPE string.
 
-    METHODS dynamic_table IMPORTING tablename TYPE string
-                                    filedata TYPE string
+    METHODS dynamic_table IMPORTING tablename       TYPE string
+                                    filedata        TYPE string
                           RETURNING VALUE(data_ref) TYPE REF TO data
-                          RAISING cx_sy_create_data_error.
+                          RAISING   cx_sy_create_data_error.
 
     METHODS create_response IMPORTING sap_table_request TYPE string
                             RETURNING VALUE(res)        TYPE string.
-    METHODS fill_table IMPORTING status TYPE REF TO lcl_status
-                                 filedata TYPE string
+    METHODS fill_table IMPORTING status      TYPE REF TO lcl_status
+                                 filedata    TYPE string
                        RETURNING VALUE(done) TYPE abap_bool.
-    METHODS unpack_data IMPORTING request TYPE REF TO if_web_http_request
+    METHODS unpack_data IMPORTING request         TYPE REF TO if_web_http_request
                         RETURNING VALUE(filedata) TYPE string
                         RAISING   cx_web_message_error.
     METHODS extract_filename IMPORTING i_content_item TYPE string
-                             EXPORTING filename TYPE string
-                                       fileext TYPE string.
+                             EXPORTING filename       TYPE string
+                                       fileext        TYPE string.
 ENDCLASS.
 
 CLASS ycl_abap_file_uploader  IMPLEMENTATION.
@@ -57,27 +57,26 @@ CLASS ycl_abap_file_uploader  IMPLEMENTATION.
   METHOD create_response.
     IF sap_table_request IS INITIAL.
       res = get_html( ).
-      RETURN.
+    ELSE.
+      DATA(name_filter) = xco_cp_abap_repository=>object_name->get_filter(
+                           xco_cp_abap_sql=>constraint->contains_pattern( to_upper( sap_table_request ) && '%' ) ).
+
+      DATA(objects) = xco_cp_abap_repository=>objects->tabl->where( VALUE #(
+                          ( name_filter ) ) )->in( xco_cp_abap=>repository )->get( ).
+
+      res = `[`.
+      LOOP AT objects INTO DATA(object).
+        res &&= |\{ "TABLE_NAME": "{ object->name }" \}|.
+        IF sy-tabix NE lines( objects ).
+          res &&= `,`.
+        ENDIF.
+      ENDLOOP.
+      res &&= `]`.
     ENDIF.
-
-    DATA(name_filter) = xco_cp_abap_repository=>object_name->get_filter(
-                         xco_cp_abap_sql=>constraint->contains_pattern( to_upper( sap_table_request ) && '%' )  ).
-
-    DATA(objects) = xco_cp_abap_repository=>objects->tabl->where( VALUE #(
-                        ( name_filter ) ) )->in( xco_cp_abap=>repository  )->get(  ).
-
-    res = `[`.
-    LOOP AT objects INTO DATA(object).
-      res &&= |\{ "TABLE_NAME": "{ object->name }" \}|.
-      IF sy-tabix NE lines( objects ).
-        res &&= `,`.
-      ENDIF.
-    ENDLOOP.
-    res &&= `]`.
   ENDMETHOD.
 
   METHOD dynamic_table.
-    FIELD-SYMBOLS <table_structure> TYPE STANDARD table.
+    FIELD-SYMBOLS <table_structure> TYPE STANDARD TABLE.
 
     CREATE DATA data_ref TYPE TABLE OF (tablename).
     ASSIGN data_ref->* TO <table_structure>.
